@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Analyse GitHub – Stats Langages</title>
+
+  <!-- Chart.js pour les graphiques -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+    }
+
+    h1 {
+      color: #58a6ff;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      color: #e6edf3;
+      margin-bottom: 10px;
+    }
+
+    .card {
+      background: #161b22;
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid #30363d;
+      margin-bottom: 20px;
+    }
+
+    input {
+      width: 70%;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: white;
+    }
+
+    button {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: none;
+      background: #238636;
+      color: white;
+      cursor: pointer;
+      margin-left: 8px;
+    }
+
+    button:hover {
+      background: #2ea043;
+    }
+
+    .profile {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-top: 15px;
+    }
+
+    .profile img {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      border: 2px solid #30363d;
+    }
+
+    .buttons {
+      margin-top: 15px;
+    }
+
+    .buttons button {
+      background: #30363d;
+      margin-right: 8px;
+    }
+
+    .buttons button:hover {
+      background: #484f58;
+    }
+
+    #status {
+      margin-top: 10px;
+      color: #8b949e;
+    }
+
+    .error {
+      color: #f87171;
+    }
+
+    .small {
+      font-size: 12px;
+      color: #8b949e;
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+
+    .summary-lang {
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <div class="card">
+    <h1>Analyse des langages GitHub</h1>
+    <p>Entrez un pseudo GitHub pour analyser tous ses dépôts (client-side, avec proxy).</p>
+
+    <input id="username" type="text" placeholder="Pseudo GitHub…">
+    <button onclick="run()">Analyser</button>
+
+    <div id="status"></div>
+
+    <div id="profile"></div>
+  </div>
+
+  <div class="card">
+    <h2>Graphique des langages</h2>
+
+    <div class="buttons">
+      <button onclick="changeChart('bar')">Barres</button>
+      <button onclick="changeChart('horizontalBar')">Barres horizontales</button>
+      <button onclick="changeChart('pie')">Camembert</button>
+      <button onclick="changeChart('doughnut')">Donut</button>
+    </div>
+
+    <canvas id="chart" height="120"></canvas>
+    <div id="summary" class="small"></div>
+  </div>
+
+</div>
+
+<script>
+let chart;
+
+// Proxy AllOrigins
+function proxied(url) {
+  return `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+}
+
+// Appel JSON via proxy
+async function fetchJson(url) {
+  const resp = await fetch(proxied(url));
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+async function run() {
+  const user = document.getElementById("username").value.trim();
+  const statusEl = document.getElementById("status");
+  const profileEl = document.getElementById("profile");
+  const summaryEl = document.getElementById("summary");
+
+  if (!user) {
+    statusEl.innerHTML = '<span class="error">Veuillez entrer un pseudo.</span>';
+    return;
+  }
+
+  statusEl.textContent = "Chargement… Cela peut prendre entre 2 et 3 minutes selon le nombre de dépôts.";
+  profileEl.innerHTML = "";
+  summaryEl.textContent = "";
+  if (chart) {
+    chart.destroy();
+    chart = null;
+  }
+
+  try {
+    statusEl.textContent = "Récupération du profil…";
+    const profile = await fetchJson(`https://api.github.com/users/${user}`);
+
+    if (profile.message) {
+      statusEl.innerHTML = `<span class="error">Erreur GitHub : ${profile.message}</span>`;
+      return;
+    }
+
+    statusEl.textContent = "Récupération des dépôts…";
+    const repos = await fetchJson(`https://api.github.com/users/${user}/repos?per_page=100`);
+
+    if (!Array.isArray(repos)) {
+      statusEl.innerHTML = `<span class="error">Impossible de récupérer les dépôts.</span>`;
+      return;
+    }
+
+    const totals = {};
+    let repoCountWithCode = 0;
+
+    statusEl.textContent = `Analyse des langages sur ${repos.length} dépôts…`;
+
+    for (const repo of repos) {
+      try {
+        const langs = await fetchJson(repo.languages_url);
+        if (langs && Object.keys(langs).length > 0) {
+          repoCountWithCode++;
+        }
+        for (const lang in langs) {
+          totals[lang] = (totals[lang] || 0) + langs[lang];
+        }
+      } catch (e) {
+        console.warn("Erreur sur repo", repo.name, e);
+      }
+    }
+
+    const labels = Object.keys(totals);
+    const values = Object.values(totals);
+    const totalLines = values.reduce((a, b) => a + b, 0);
+
+    if (labels.length === 0 || totalLines === 0) {
+      statusEl.innerHTML = `<span class="error">Aucune ligne de code détectée.</span>`;
+      renderProfile(profile, 0);
+      return;
+    }
+
+    statusEl.textContent = "Analyse terminée.";
+    renderProfile(profile, totalLines);
+    renderChartAndStats({
+      totals,
+      repoCount: repos.length,
+      repoCountWithCode,
+      totalLines
+    });
+
+  } catch (err) {
+    console.error(err);
+    statusEl.innerHTML = `<span class="error">Erreur : ${err.message}</span>`;
+  }
+}
+
+function renderProfile(profile, totalLines) {
+  const profileEl = document.getElementById("profile");
+  const lastActivity = profile.updated_at ? profile.updated_at.slice(0, 10) : "N/A";
+  const created = profile.created_at ? profile.created_at.slice(0, 10) : "N/A";
+
+  profileEl.innerHTML = `
+    <div class="profile">
+      <img src="${profile.avatar_url}" alt="avatar">
+      <div>
+        <strong>${profile.login}</strong><br>
+        ${profile.name ? profile.name + "<br>" : ""}
+        ${profile.bio || "Aucune bio"}<br>
+        Followers : ${profile.followers} · Following : ${profile.following}<br>
+        Repos publics : ${profile.public_repos}<br>
+        Créé le : ${created} · Dernière activité : ${lastActivity}<br>
+        <strong>Lignes totales analysées : ${totalLines}</strong>
+      </div>
+    </div>
+  `;
+}
+
+function renderChartAndStats(data) {
+  const labels = Object.keys(data.totals);
+  const values = Object.values(data.totals);
+  const totalLines = data.totalLines;
+
+  drawChart("bar", labels, values);
+
+  const summaryEl = document.getElementById("summary");
+
+  const rows = labels.map((lang, i) => {
+    const percent = ((values[i] / totalLines) * 100).toFixed(2);
+    return `<div class="summary-lang">${lang}: ${percent}% (${values[i]} lignes)</div>`;
+  });
+
+  summaryEl.innerHTML = `
+    <strong>Résumé :</strong><br>
+    Dépôts analysés : ${data.repoCount}<br>
+    Dépôts contenant du code : ${data.repoCountWithCode}<br>
+    Lignes totales : ${totalLines}<br><br>
+    <strong>Langages :</strong><br>
+    ${rows.join("")}
+  `;
+}
+
+function drawChart(type, labels, values) {
+  if (chart) chart.destroy();
+
+  const ctx = document.getElementById("chart").getContext("2d");
+
+  chart = new Chart(ctx, {
+    type: type === "horizontalBar" ? "bar" : type,
+    data: {
+      labels,
+      datasets: [{
+        label: "Lignes de code",
+        data: values,
+        backgroundColor: labels.map((_, i) => `hsl(${(i * 47) % 360}, 70%, 55%)`)
+      }]
+    },
+    options: {
+      indexAxis: type === "horizontalBar" ? "y" : "x",
+      responsive: true,
+      plugins: {
+        legend: { display: type !== "bar" },
+        tooltip: {
+          callbacks: {
+            label: function(context) {
+              const value = context.raw;
+              const total = context.dataset.data.reduce((a, b) => a + b, 0);
+              const percent = ((value / total) * 100).toFixed(2);
+              return `${context.label}: ${value} lignes (${percent}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function changeChart(type) {
+  if (!chart) return;
+  drawChart(type, chart.data.labels, chart.data.datasets[0].data);
+}
+
+// Enter pour lancer
+document.getElementById("username").addEventListener("keydown", e => {
+  if (e.key === "Enter") run();
+});
+</script>
+
+</body>
+</html>
